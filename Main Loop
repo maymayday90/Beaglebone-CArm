@@ -1,0 +1,292 @@
+#COMPLETE THINGY
+
+import Adafruit_BBIO.PWM as PWM 
+import Adafruit_BBIO.GPIO as GPIO
+import Adafruit_BBIO.ADC as ADC
+import Adafruit_BBIO.UART as UART
+import math
+import time
+import serial
+import datetime
+
+#Serial Initialization
+ser = serial.Serial('/dev/ttyUSB0',9600,timeout = 0.01)
+ser.close()
+ser.open()
+if ser.isOpen():
+	print "Serial is open!"
+else: 
+    ser.close()
+    
+
+print ser.name  
+
+#Load Cell Bias
+ser.write("SB\r\n")	
+ser.close()
+print "Wait"
+time.sleep(1)
+
+
+#Variable Initialization
+m1_pin = "P9_16"
+m2_pin = "P9_21"
+m3_pin = "P8_13"
+pbutton1_pin = "P9_23"
+pbutton2_pin = "P9_27"
+pot1_pin = 'P9_40'
+pot2_pin = 'P9_40'
+pot3_pin = 'P9_40'
+pbutton1_state = 0
+pbutton2_state = 0
+duty_min = 6.4 
+duty_max = 11.5
+duty_span = duty_max - duty_min 
+duty_m1 = duty_m2 = duty_m3 = 100 - (0.5 * duty_span + duty_min)
+x_speed_scaler = 0.2 #max 3
+m1_speed_offset = 86.0
+y_speed_scaler = 0.2 #max 3
+m2_speed_offset = 86.0
+z_speed_scaler = 0.5 #max 1
+m3_speed_offset = 86.0
+
+
+drive_speed_state = 0
+x_speed_state = 0
+y_speed_state = 0
+z_speed_state = 0
+
+
+
+#Table for motor mixing
+mixer_table = [[1,0,-1],[-1/math.cos(math.radians(60)),-1/math.sin(math.radians(60)),-0.8125],[-1/math.cos(math.radians(60)),1/math.sin(math.radians(60)),-0.8125]]
+scaler = max(max(abs(i) for i in mixer_table[0][0:]),max(abs(i) for i in mixer_table[1][0:]),max(abs(i) for i in mixer_table[2][0:]))
+mixer_table[0][0:] = [x / scaler for x in mixer_table[0][0:]]
+mixer_table[1][0:] = [x / scaler for x in mixer_table[1][0:]]
+mixer_table[2][0:] = [x / scaler for x in mixer_table[2][0:]]
+
+
+GPIO.setup(pbutton1_pin, GPIO.IN)
+GPIO.setup(pbutton2_pin, GPIO.IN)
+
+PWM.start(m1_pin, duty_m1, 60.0, 1) 
+PWM.start(m2_pin, duty_m2, 60.0, 1) 
+PWM.start(m3_pin, duty_m3, 60.0, 1) 
+
+
+ser.open()
+
+print "Go!"
+
+while True:
+    
+    
+    #Grab load cell data
+    ser.flushInput()
+    ser.flushOutput()
+    ser.write("QR\r\n")	
+    line = ser.read(70)
+    linesplit = line.split(',')
+    Fx = int(linesplit[1])
+    Fy = int(linesplit[2])
+    Fz = int(linesplit[3])
+    Mx = int(linesplit[4])
+    My = int(linesplit[5])
+    Mz = int(linesplit[6][:6])
+    #End of load cell grab
+    
+    
+    angle_m1 = float((Mx*mixer_table[0][0]*x_speed_scaler)+(My*mixer_table[0][1]*y_speed_scaler)+(Mz*mixer_table[0][2]*z_speed_scaler)+m1_speed_offset) #Mx*mixer_table[0][0]*90/30
+    angle_m2 = float((Mx*mixer_table[1][0]*x_speed_scaler)+(My*mixer_table[1][1]*y_speed_scaler)+(Mz*mixer_table[1][2]*z_speed_scaler)+m2_speed_offset) #Mx*mixer_table[1][0]*90/30
+    angle_m3 = float((Mx*mixer_table[2][0]*x_speed_scaler)+(My*mixer_table[2][1]*y_speed_scaler)+(Mz*mixer_table[2][2]*z_speed_scaler)+m3_speed_offset) #Mx*mixer_table[2][0]*90/30
+    
+    #print Mx,My,Mz,angle_m1,angle_m2,angle_m3
+    
+    #angle_m1 = angle_m2 = angle_m3 = raw_input("Speed (0 to 180, 90 middle, x to exit):")
+    #angle_m1 = float(angle_m1)
+    #angle_m2 = float(angle_m2)
+    #angle_m3 = float(angle_m3)
+    
+    
+    duty_m1 = 100 - ((angle_m1 / 180) * duty_span + duty_min)
+    duty_m2 = 100 - ((angle_m2 / 180) * duty_span + duty_min)
+    duty_m3 = 100 - ((angle_m3 / 180) * duty_span + duty_min)
+    
+    pbutton1_state = GPIO.input(pbutton1_pin)
+    pbutton2_state = GPIO.input(pbutton2_pin)
+    
+    if pbutton1_state == 1:
+        duty_m1 = 100 - ((m1_speed_offset / 180) * duty_span + duty_min)
+        duty_m2 = 100 - ((m2_speed_offset / 180) * duty_span + duty_min)
+        duty_m3 = 100 - ((m3_speed_offset / 180) * duty_span + duty_min)
+        PWM.set_duty_cycle(m1_pin, duty_m1)
+        PWM.set_duty_cycle(m2_pin, duty_m2)
+        PWM.set_duty_cycle(m3_pin, duty_m3)
+        print "Welcome to the menu! Left/right to switch mode, up/down to change value"
+        menu_state = 0
+        print "Speed is %d" % drive_speed_state
+        
+        while pbutton1_state == 1:
+            
+            
+            pbutton1_state = GPIO.input(pbutton1_pin)
+            pbutton2_state = GPIO.input(pbutton2_pin)
+            
+            
+            #Grab load cell data
+            ser.flushInput()
+            ser.flushOutput()
+            ser.write("QR\r\n")	
+            line = ser.read(70)
+            linesplit = line.split(',')
+            Fx = int(linesplit[1])
+            Fy = int(linesplit[2])
+            Fz = int(linesplit[3])
+            Mx = int(linesplit[4])
+            My = int(linesplit[5])
+            Mz = int(linesplit[6][:6])
+            #End of load cell grab
+            
+            
+            
+            
+            if Mx > 30:
+                menu_state = menu_state + 1
+                if menu_state > 4:
+                    menu_state = 4
+                if menu_state == 4:
+                    print "Changing steering location"
+                elif menu_state == 3:
+                    print "Z direction is %d" % z_speed_state
+                elif menu_state == 2:
+                    print "Y direction is %d" % y_speed_state
+                elif menu_state == 1:
+                    print "X direction is %d" % x_speed_state
+                else:
+                    print "Speed is %d" % drive_speed_state
+                time.sleep(0.5)
+                
+            elif Mx < -30:
+                menu_state = menu_state - 1
+                if menu_state < 0:
+                    menu_state = 0
+                if menu_state == 4:
+                    print "Changing steering location"
+                elif menu_state == 3:
+                    print "Z direction is %d" % z_speed_state
+                elif menu_state == 2:
+                    print "Y direction is %d" % y_speed_state
+                elif menu_state == 1:
+                    print "X direction is %d" % x_speed_state
+                else:
+                    print "Speed is %d" % drive_speed_state
+                time.sleep(0.5)
+            
+            
+            if menu_state == 0:
+                if My > 30:
+                    drive_speed_state = drive_speed_state + 1
+                    if drive_speed_state > 2:
+                        drive_speed_state = 2
+                    print "Speed is %d" % drive_speed_state
+                    time.sleep(0.5)
+                elif My < -30:
+                    drive_speed_state = drive_speed_state - 1
+                    if drive_speed_state < 0:
+                        drive_speed_state = 0
+                    print "Speed is %d" % drive_speed_state
+                    time.sleep(0.5)
+                    
+            elif menu_state == 1:
+                if My > 30:
+                    x_speed_state = x_speed_state + 1
+                    if x_speed_state > 1:
+                        x_speed_state = 1
+                    print "X direction is %d" % x_speed_state
+                    time.sleep(0.5)
+                elif My < -30:
+                    x_speed_state = x_speed_state - 1
+                    if x_speed_state < 0:
+                        x_speed_state = 0
+                    print "X direction is %d" % x_speed_state
+                    time.sleep(0.5)
+            elif menu_state == 2:
+                if My > 30:
+                    y_speed_state = y_speed_state + 1
+                    if y_speed_state > 1:
+                        y_speed_state = 1
+                    print "Y direction is %d" % y_speed_state
+                    time.sleep(0.5)
+                elif My < -30:
+                    y_speed_state = y_speed_state - 1
+                    if y_speed_state < 0:
+                        y_speed_state = 0
+                    print "Y direction is %d" % y_speed_state
+                    time.sleep(0.5)
+            elif menu_state == 3:
+                if My > 30:
+                    z_speed_state = z_speed_state + 1
+                    if z_speed_state > 1:
+                        z_speed_state = 1
+                    print "Z direction is %d" % z_speed_state
+                    time.sleep(0.5)
+                elif My < -30:
+                    z_speed_state = z_speed_state - 1
+                    if z_speed_state < 0:
+                        z_speed_state = 0
+                    print "Z direction is %d" % z_speed_state
+                    time.sleep(0.5)
+            
+            
+            if pbutton2_state == 1:
+                print "Exit button pressed"
+                ser.close()
+                PWM.stop(m1_pin)
+                PWM.stop(m2_pin)
+                PWM.stop(m3_pin)
+                PWM.cleanup()
+                print "Done!"
+                time.sleep(0.2)
+                break
+        
+        print "Exiting menu"
+        if drive_speed_state == 2:
+            x_speed_scaler = 2.2
+            y_speed_scaler = 2.2
+            z_speed_scaler = 0.9
+        elif drive_speed_state == 1:
+            x_speed_scaler = 1
+            y_speed_scaler = 1
+            z_speed_scaler = 0.5
+        elif drive_speed_state == 0:
+            x_speed_scaler = 0.2
+            y_speed_scaler = 0.2
+            z_speed_scalar = 0.3
+        else:
+            x_speed_scaler = 0.2
+            y_speed_scaler = 0.2
+            z_speed_scaler = 0.3
+        
+        if x_speed_state == 0:
+            x_speed_scaler = 0.0
+        if y_speed_state == 0:
+            y_speed_scaler = 0.0
+        if z_speed_state == 0:
+            z_speed_scaler = 0.0
+        print x_speed_scaler,y_speed_scaler,z_speed_scaler
+        
+    
+    if pbutton2_state == 1:
+        print "Exit button pressed"
+        ser.close()
+        PWM.stop(m1_pin)
+        PWM.stop(m2_pin)
+        PWM.stop(m3_pin)
+        PWM.cleanup()
+        print "Done!"
+        time.sleep(0.2)
+        break
+    
+    PWM.set_duty_cycle(m1_pin, duty_m1)
+    PWM.set_duty_cycle(m2_pin, duty_m2)
+    PWM.set_duty_cycle(m3_pin, duty_m3)
